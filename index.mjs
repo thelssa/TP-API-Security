@@ -1,2 +1,1 @@
-import Server from './src/server.mjs';
-
+import './src/server.mjs';

@@ -1,62 +1,44 @@
 import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import https from 'https';
+import fs from 'fs';
+
 import config from './config.mjs';
-import albumController from './controllers/albumController.mjs';
-import photoController from './controllers/photoController.mjs';
+import authRoutes from './controllers/route.mjs';
+import authenticateToken from './controllers/auth.mjs';
 
 const env = process.env.NODE_ENV || 'development';
-const settings = config[env];
+const { port, mongodb } = config[env];
 
-class Server {
-  constructor() {
-    this.app = express();
-    this.config();
-    this.mongo();
-    this.routes();
-  }
+const app = express();
 
-  config() {
-    this.app.use(cors());
-    this.app.use(express.json());
-    this.app.use(express.urlencoded({ extended: false }));
-  }
+app.use(helmet());
+app.use(cors({ origin: 'http://localhost:3000' }));
+app.use(express.json());
+app.use(rateLimit({ windowMs: 60 * 60 * 1000, max: 100 }));
 
-  mongo() {
-    mongoose.set('strictQuery', false);
-    mongoose.connect(settings.mongodb, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    })
-      .then(() => {
-        console.log(`✅ MongoDB connecté (${env})`);
-        this.app.listen(settings.port, () => {
-          console.log(`🚀 Serveur lancé sur http://localhost:${settings.port}`);
-        });
-      })
-      .catch((err) => {
-        console.error('❌ Erreur MongoDB :', err.message);
-      });
-  }
+mongoose.connect(mongodb, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
+  console.log('MongoDB connecté');
+  const key = fs.readFileSync('server.key');
+  const cert = fs.readFileSync('server.cert');
+  https.createServer({ key, cert }, app).listen(port, () => {
+    console.log(`Serveur HTTPS sur https://localhost:${port}`);
+  });
+}).catch((err) => console.error('Erreur MongoDB :', err));
 
-  routes() {
-    this.app.get('/api/albums', albumController.getAllAlbums);
-    this.app.get('/api/album/:id', albumController.getAlbumById);
-    this.app.post('/api/album', albumController.createAlbum);
-    this.app.put('/api/album/:id', albumController.updateAlbum);
-    this.app.delete('/api/album/:id', albumController.deleteAlbum);
+app.use('/api/auth', authRoutes);
 
-    this.app.get('/api/album/:idalbum/photos', photoController.getPhotosByAlbum);
-    this.app.get('/api/album/:idalbum/photo/:idphotos', photoController.getPhotoById);
-    this.app.post('/api/album/:idalbum/photo', photoController.addPhotoToAlbum);
-    this.app.put('/api/album/:idalbum/photo/:idphotos', photoController.updatePhoto);
-    this.app.delete('/api/album/:idalbum/photo/:idphotos', photoController.deletePhoto);
+app.get('/api/protected', authenticateToken, (req, res) => {
+  res.json({ message: `Accès sécurisé à ${req.user.email}` });
+});
 
-    this.app.use((req, res) => {
-      res.status(404).json({ code: 404, message: 'Not Found' });
-    });
-  }
-}
-
-new Server();
-export default Server;
+app.use((err, req, res) => {
+  console.error(err);
+  return res.status(500).json({ error: 'Erreur serveur' });
+});
